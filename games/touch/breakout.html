@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Breakout with Power-Ups</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: white;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            aspect-ratio: 3/4;
+            border: 2px solid #444;
+        }
+        
+        canvas {
+            background-color: #000;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 20px;
+        }
+        
+        button {
+            background-color: #333;
+            color: white;
+            border: 1px solid #666;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            min-width: 100px;
+        }
+        
+        #start-btn {
+            background-color: #0a6;
+        }
+        
+        #game-info {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 5px;
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-info">
+        <div id="score">Score: 0</div>
+        <div id="lives">Lives: 3</div>
+    </div>
+    
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="message">Touch to Start</div>
+    </div>
+    
+    <div id="controls">
+        <button id="reset-btn">Reset</button>
+        <button id="start-btn">Start/Pause</button>
+    </div>
+
+    <script>
+        // ==================== GAME INITIALIZATION ====================
+        
+        // DOM Elements
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const messageEl = document.getElementById('message');
+        const scoreEl = document.getElementById('score');
+        const livesEl = document.getElementById('lives');
+        const startBtn = document.getElementById('start-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const gameContainer = document.getElementById('game-container');
+        
+        // Game State
+        const gameState = {
+            score: 0,
+            lives: 3,
+            level: 1,
+            paused: true,
+            gameOver: false,
+            lastFrameTime: 0
+        };
+        
+        // Game Objects
+        const paddle = {
+            width: 0,
+            height: 0,
+            x: 0,
+            y: 0,
+            defaultWidth: 0
+        };
+        
+        const mainBall = {
+            x: 0,
+            y: 0,
+            radius: 0,
+            dx: 0,
+            dy: 0,
+            defaultRadius: 0,
+            active: true
+        };
+        
+        // Additional balls
+        let multiBalls = [];
+        
+        // Bricks configuration
+        const brickConfig = {
+            rows: 5,
+            columns: 8,
+            padding: 5,
+            width: 0,
+            height: 0,
+            offsetTop: 30
+        };
+        
+        let bricks = [];
+        
+        // Power-up system
+        const powerUpConfig = {
+            types: ['paddleExtender', 'multiBall', 'bigBall'],
+            colors: {
+                paddleExtender: '#00FFFF',
+                multiBall: '#FF00FF',
+                bigBall: '#FFFF00'
+            },
+            labels: {
+                paddleExtender: 'E',
+                multiBall: 'M',
+                bigBall: 'B'
+            },
+            // Chance a brick spawns a power-up
+            chance: 0.2,
+            // Duration of time-limited power-ups in ms
+            duration: 10000,
+            // Speed multiplier for falling power-ups
+            speedMultiplier: 0.003
+        };
+        
+        const activePowerUps = {
+            paddleExtender: { active: false, endTime: 0 },
+            bigBall: { active: false, endTime: 0 }
+        };
+        
+        let powerUps = [];
+        
+        // Touch tracking
+        const touch = {
+            startX: 0,
+            lastX: 0
+        };
+        
+        // ==================== INITIALIZATION FUNCTIONS ====================
+        
+        // Initialize or reset the game
+        function initGame() {
+            // Set canvas dimensions
+            resizeCanvas();
+            
+            // Initialize paddle
+            paddle.height = canvas.height * 0.025;
+            paddle.defaultWidth = canvas.width * 0.2;
+            paddle.width = paddle.defaultWidth;
+            paddle.x = (canvas.width - paddle.width) / 2;
+            paddle.y = canvas.height - paddle.height - 10;
+            
+            // Initialize ball
+            mainBall.defaultRadius = canvas.width * 0.02;
+            mainBall.radius = mainBall.defaultRadius;
+            resetBall(mainBall);
+            mainBall.active = true;
+            
+            // Initialize bricks
+            brickConfig.width = (canvas.width - (brickConfig.columns + 1) * brickConfig.padding) / brickConfig.columns;
+            brickConfig.height = canvas.height * 0.04;
+            createBricks();
+            
+            // Reset game state
+            gameState.score = 0;
+            gameState.lives = 3;
+            gameState.level = 1;
+            gameState.paused = true;
+            gameState.gameOver = false;
+            
+            // Reset power-ups
+            powerUps = [];
+            multiBalls = [];
+            activePowerUps.paddleExtender.active = false;
+            activePowerUps.bigBall.active = false;
+            
+            // Update UI
+            updateScore();
+            updateLives();
+            showMessage("Touch to Start");
+            
+            // Start the game loop if it's not already running
+            if (!gameState.loopStarted) {
+                gameState.loopStarted = true;
+                requestAnimationFrame(gameLoop);
+            }
+        }
+        
+        // Resize canvas to fit container
+        function resizeCanvas() {
+            canvas.width = gameContainer.clientWidth;
+            canvas.height = gameContainer.clientHeight;
+        }
+        
+        // Reset ball position and speed
+        function resetBall(ball) {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            
+            // Set random horizontal direction, but always move upward
+            const speed = 4 + gameState.level * 0.5;
+            ball.dx = speed * (Math.random() > 0.5 ? 1 : -1);
+            ball.dy = -speed;
+        }
+        
+        // Initialize bricks
+        function createBricks() {
+            bricks = [];
+            
+            const colors = [
+                '#FF5555', // Red
+                '#FFAA55', // Orange
+                '#FFFF55', // Yellow
+                '#55FF55', // Green
+                '#5555FF'  // Blue
+            ];
+            
+            for (let r = 0; r < brickConfig.rows; r++) {
+                bricks[r] = [];
+                for (let c = 0; c < brickConfig.columns; c++) {
+                    bricks[r][c] = {
+                        x: c * (brickConfig.width + brickConfig.padding) + brickConfig.padding,
+                        y: r * (brickConfig.height + brickConfig.padding) + brickConfig.offsetTop,
+                        status: 1,
+                        color: colors[r],
+                        points: (brickConfig.rows - r) * 10 // Higher rows worth more points
+                    };
+                }
+            }
+        }
+        
+        // ==================== POWER-UP FUNCTIONS ====================
+        
+        // Create a power-up at specified location
+        function spawnPowerUp(x, y) {
+            // Randomly select a power-up type
+            const type = powerUpConfig.types[Math.floor(Math.random() * powerUpConfig.types.length)];
+            
+            // Create the power-up object
+            const powerUp = {
+                x: x,
+                y: y,
+                width: brickConfig.width * 0.6,
+                height: brickConfig.height * 0.8,
+                type: type,
+                speed: canvas.height * powerUpConfig.speedMultiplier * (2 + gameState.level * 0.5)
+            };
+            
+            powerUps.push(powerUp);
+        }
+        
+        // Handle power-up activation
+        function activatePowerUp(type) {
+            const currentTime = Date.now();
+            
+            switch (type) {
+                case 'paddleExtender':
+                    // Extend paddle width by 50%
+                    activePowerUps.paddleExtender.active = true;
+                    activePowerUps.paddleExtender.endTime = currentTime + powerUpConfig.duration;
+                    paddle.width = paddle.defaultWidth * 1.5;
+                    
+                    // Ensure paddle doesn't go off-screen
+                    if (paddle.x + paddle.width > canvas.width) {
+                        paddle.x = canvas.width - paddle.width;
+                    }
+                    break;
+                    
+                case 'multiBall':
+                    // Create two additional balls
+                    for (let i = 0; i < 2; i++) {
+                        createMultiBall();
+                    }
+                    break;
+                    
+                case 'bigBall':
+                    // Make balls bigger
+                    activePowerUps.bigBall.active = true;
+                    activePowerUps.bigBall.endTime = currentTime + powerUpConfig.duration;
+                    
+                    // Double the size of all balls
+                    mainBall.radius = mainBall.defaultRadius * 2;
+                    for (let i = 0; i < multiBalls.length; i++) {
+                        multiBalls[i].radius = mainBall.radius;
+                    }
+                    break;
+            }
+        }
+        
+        // Create a new ball for multi-ball power-up
+        function createMultiBall() {
+            // Random angle between 0 and 2π
+            const angle = Math.random() * Math.PI * 2;
+            
+            // Base speed on main ball speed
+            const speed = Math.sqrt(mainBall.dx * mainBall.dx + mainBall.dy * mainBall.dy);
+            
+            const newBall = {
+                x: mainBall.x,
+                y: mainBall.y,
+                radius: activePowerUps.bigBall.active ? mainBall.radius : mainBall.defaultRadius,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed
+            };
+            
+            // Ensure the ball has enough vertical velocity
+            if (Math.abs(newBall.dy) < speed * 0.3) {
+                newBall.dy = speed * 0.3 * (newBall.dy < 0 ? -1 : 1);
+            }
+            
+            multiBalls.push(newBall);
+        }
+        
+        // Update all power-ups (falling, active timers, etc.)
+        function updatePowerUps(deltaTime) {
+            if (gameState.paused) return;
+            
+            // Move falling power-ups
+            for (let i = 0; i < powerUps.length; i++) {
+                const powerUp = powerUps[i];
+                powerUp.y += powerUp.speed;
+                
+                // Check for collision with paddle
+                if (powerUp.y + powerUp.height/2 > paddle.y && 
+                    powerUp.y - powerUp.height/2 < paddle.y + paddle.height &&
+                    powerUp.x + powerUp.width/2 > paddle.x && 
+                    powerUp.x - powerUp.width/2 < paddle.x + paddle.width) {
+                    
+                    // Activate the power-up
+                    activatePowerUp(powerUp.type);
+                    
+                    // Remove this power-up
+                    powerUps.splice(i, 1);
+                    i--;
+                    continue;
+                }
+                
+                // Remove power-ups that fall off screen
+                if (powerUp.y - powerUp.height/2 > canvas.height) {
+                    powerUps.splice(i, 1);
+                    i--;
+                }
+            }
+            
+            // Check for expired power-ups
+            const currentTime = Date.now();
+            
+            // Handle paddle extender expiration
+            if (activePowerUps.paddleExtender.active && currentTime > activePowerUps.paddleExtender.endTime) {
+                activePowerUps.paddleExtender.active = false;
+                paddle.width = paddle.defaultWidth;
+                
+                // Ensure paddle doesn't go off-screen after resizing
+                if (paddle.x + paddle.width > canvas.width) {
+                    paddle.x = canvas.width - paddle.width;
+                }
+            }
+            
+            // Handle big ball expiration
+            if (activePowerUps.bigBall.active && currentTime > activePowerUps.bigBall.endTime) {
+                activePowerUps.bigBall.active = false;
+                mainBall.radius = mainBall.defaultRadius;
+                
+                // Reset multi-ball radii too
+                for (let i = 0; i < multiBalls.length; i++) {
+                    multiBalls[i].radius = mainBall.defaultRadius;
+                }
+            }
+        }
+        
+        // ==================== GAME MECHANICS FUNCTIONS ====================
+        
+        // Check collision between a ball and bricks
+        function checkBallBrickCollisions(ball) {
+            for (let r = 0; r < brickConfig.rows; r++) {
+                for (let c = 0; c < brickConfig.columns; c++) {
+                    const brick = bricks[r][c];
+                    
+                    if (brick.status === 1) {
+                        // Check if ball is colliding with this brick
+                        if (ball.x + ball.radius > brick.x && 
+                            ball.x - ball.radius < brick.x + brickConfig.width && 
+                            ball.y + ball.radius > brick.y && 
+                            ball.y - ball.radius < brick.y + brickConfig.height) {
+                            
+                            // Simplified collision response: just reverse vertical direction
+                            ball.dy = -ball.dy;
+                            
+                            // Mark brick as broken
+                            brick.status = 0;
+                            
+                            // Update score
+                            gameState.score += brick.points || 10;
+                            updateScore();
+                            
+                            // Chance to spawn a power-up
+                            if (Math.random() < powerUpConfig.chance) {
+                                spawnPowerUp(brick.x + brickConfig.width/2, brick.y + brickConfig.height/2);
+                            }
+                            
+                            // Return true to indicate collision occurred
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        
+        // Check if all bricks are destroyed
+        function checkLevelComplete() {
+            for (let r = 0; r < brickConfig.rows; r++) {
+                for (let c = 0; c < brickConfig.columns; c++) {
+                    if (bricks[r][c].status === 1) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        
+        // Update a single ball's position and handle collisions
+        function updateBall(ball) {
+            // Move the ball
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+            
+            // Wall collision (left and right)
+            if (ball.x - ball.radius < 0 || ball.x + ball.radius > canvas.width) {
+                ball.dx = -ball.dx;
+            }
+            
+            // Wall collision (top)
+            if (ball.y - ball.radius < 0) {
+                ball.dy = -ball.dy;
+            }
+            
+            // Paddle collision
+            if (ball.y + ball.radius > paddle.y && 
+                ball.y - ball.radius < paddle.y + paddle.height && 
+                ball.x > paddle.x && 
+                ball.x < paddle.x + paddle.width) {
+                
+                // Calculate where on the paddle the ball hit (range: -1 to 1)
+                const hitPosition = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+                
+                // Change angle based on where the ball hit the paddle
+                ball.dx = hitPosition * (6 + gameState.level);
+                ball.dy = -Math.abs(ball.dy);
+            }
+            
+            // Check if ball fell below paddle
+            if (ball.y - ball.radius > canvas.height) {
+                return false; // Ball is lost
+            }
+            
+            // Check brick collisions
+            checkBallBrickCollisions(ball);
+            
+            return true; // Ball is still in play
+        }
+        
+        // Update all game objects
+        function updateGame(deltaTime) {
+            if (gameState.paused) return;
+            
+            // Update power-ups first
+            updatePowerUps(deltaTime);
+            
+            // Update main ball if it's active
+            if (mainBall.active) {
+                const mainBallActive = updateBall(mainBall);
+                
+                if (!mainBallActive) {
+                    // Main ball is lost
+                    if (multiBalls.length === 0) {
+                        // No balls left, lose a life
+                        gameState.lives--;
+                        updateLives();
+                        
+                        if (gameState.lives <= 0) {
+                            // Game over
+                            gameState.gameOver = true;
+                            gameState.paused = true;
+                            showMessage("Game Over! Final Score: " + gameState.score);
+                        } else {
+                            // Reset ball for next life
+                            resetBall(mainBall);
+                            gameState.paused = true;
+                            showMessage("Ball Lost! Lives: " + gameState.lives);
+                        }
+                    } else {
+                        // We still have multi-balls, just deactivate main ball
+                        mainBall.active = false;
+                    }
+                }
+            }
+            
+            // Update multi-balls
+            for (let i = 0; i < multiBalls.length; i++) {
+                const ballActive = updateBall(multiBalls[i]);
+                
+                if (!ballActive) {
+                    // This ball is lost, remove it
+                    multiBalls.splice(i, 1);
+                    i--;
+                }
+            }
+            
+            // Check if we need to reactivate the main ball
+            if (!mainBall.active && multiBalls.length === 0 && !gameState.gameOver) {
+                mainBall.active = true;
+                resetBall(mainBall);
+                gameState.paused = true;
+                showMessage("Touch to Continue");
+            }
+            
+            // Check if level is complete
+            if (checkLevelComplete()) {
+                gameState.level++;
+                createBricks();
+                resetBall(mainBall);
+                multiBalls = []; // Clear multi-balls between levels
+                gameState.paused = true;
+                showMessage(`Level ${gameState.level}! Touch to Continue`);
+            }
+        }
+        
+        // ==================== DRAWING FUNCTIONS ====================
+        
+        // Draw the paddle
+        function drawPaddle() {
+            ctx.beginPath();
+            ctx.rect(paddle.x, paddle.y, paddle.width, paddle.height);
+            ctx.fillStyle = '#0095DD';
+            ctx.fill();
+            ctx.closePath();
+        }
+        
+        // Draw a ball
+        function drawBall(ball, color = '#FF5555') {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.closePath();
+        }
+        
+        // Draw all bricks
+        function drawBricks() {
+            for (let r = 0; r < brickConfig.rows; r++) {
+                for (let c = 0; c < brickConfig.columns; c++) {
+                    if (bricks[r][c].status === 1) {
+                        ctx.beginPath();
+                        ctx.rect(
+                            bricks[r][c].x,
+                            bricks[r][c].y,
+                            brickConfig.width,
+                            brickConfig.height
+                        );
+                        ctx.fillStyle = bricks[r][c].color;
+                        ctx.fill();
+                        ctx.closePath();
+                    }
+                }
+            }
+        }
+        
+        // Draw falling power-ups
+        function drawPowerUps() {
+            for (let i = 0; i < powerUps.length; i++) {
+                const powerUp = powerUps[i];
+                const type = powerUp.type;
+                
+                ctx.beginPath();
+                
+                if (type === 'paddleExtender' || type === 'multiBall') {
+                    // Draw rectangle for paddle extender and multi-ball
+                    ctx.rect(
+                        powerUp.x - powerUp.width/2,
+                        powerUp.y - powerUp.height/2,
+                        powerUp.width,
+                        powerUp.height
+                    );
+                } else {
+                    // Draw circle for big ball
+                    ctx.arc(
+                        powerUp.x,
+                        powerUp.y,
+                        powerUp.width/2,
+                        0,
+                        Math.PI * 2
+                    );
+                }
+                
+                // Fill with appropriate color
+                ctx.fillStyle = powerUpConfig.colors[type];
+                ctx.fill();
+                ctx.closePath();
+                
+                // Draw label text
+                ctx.fillStyle = '#000';
+                ctx.font = `${powerUp.height * 0.8}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(powerUpConfig.labels[type], powerUp.x, powerUp.y);
+            }
+        }
+        
+        // Draw power-up timers and indicators
+        function drawPowerUpIndicators() {
+            const currentTime = Date.now();
+            const indicatorY = 25;
+            let indicatorX = 10;
+            
+            // Draw timers for active power-ups
+            if (activePowerUps.paddleExtender.active) {
+                const timeLeft = Math.max(0, (activePowerUps.paddleExtender.endTime - currentTime) / 1000);
+                ctx.fillStyle = powerUpConfig.colors.paddleExtender;
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillText(`Paddle+ ${timeLeft.toFixed(1)}s`, indicatorX, indicatorY);
+                indicatorX += 120;
+            }
+            
+            if (activePowerUps.bigBall.active) {
+                const timeLeft = Math.max(0, (activePowerUps.bigBall.endTime - currentTime) / 1000);
+                ctx.fillStyle = powerUpConfig.colors.bigBall;
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillText(`BigBall ${timeLeft.toFixed(1)}s`, indicatorX, indicatorY);
+            }
+            
+            // Draw multi-ball count if any are active
+            if (multiBalls.length > 0) {
+                ctx.fillStyle = powerUpConfig.colors.multiBall;
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'right';
+                ctx.fillText(`Multi-Balls: ${multiBalls.length}`, canvas.width - 10, indicatorY);
+            }
+        }
+        
+        // Draw everything
+        function drawGame() {
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw game elements
+            drawBricks();
+            drawPowerUps();
+            
+            // Draw main ball if active
+            if (mainBall.active) {
+                drawBall(mainBall);
+            }
+            
+            // Draw multi-balls
+            for (let i = 0; i < multiBalls.length; i++) {
+                drawBall(multiBalls[i], '#FF8888');
+            }
+            
+            drawPaddle();
+            drawPowerUpIndicators();
+        }
+        
+        // ==================== UI FUNCTIONS ====================
+        
+        // Update score display
+        function updateScore() {
+            scoreEl.textContent = `Score: ${gameState.score}`;
+        }
+        
+        // Update lives display
+        function updateLives() {
+            livesEl.textContent = `Lives: ${gameState.lives}`;
+        }
+        
+        // Show a message overlay
+        function showMessage(text) {
+            messageEl.textContent = text;
+            messageEl.style.display = 'block';
+        }
+        
+        // Hide the message overlay
+        function hideMessage() {
+            messageEl.style.display = 'none';
+        }
+        
+        // ==================== GAME LOOP ====================
+        
+        // Main game loop
+        function gameLoop(timestamp) {
+            // Calculate delta time
+            const deltaTime = timestamp - (gameState.lastFrameTime || timestamp);
+            gameState.lastFrameTime = timestamp;
+            
+            // Update game state
+            updateGame(deltaTime);
+            
+            // Draw everything
+            drawGame();
+            
+            // Continue the loop
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // ==================== EVENT LISTENERS ====================
+        
+        // Start/pause button
+        startBtn.onclick = function() {
+            if (gameState.gameOver) {
+                // If game over, restart
+                initGame();
+            } else {
+                // Toggle pause state
+                gameState.paused = !gameState.paused;
+                
+                if (gameState.paused) {
+                    showMessage("Paused");
+                } else {
+                    hideMessage();
+                }
+            }
+        };
+        
+        // Reset button
+        resetBtn.onclick = function() {
+            initGame();
+        };
+        
+        // Touch controls for paddle
+        gameContainer.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+            
+            const rect = canvas.getBoundingClientRect();
+            const touchX = e.touches[0].clientX - rect.left;
+            
+            // Move paddle to touch position (centered)
+            paddle.x = touchX - (paddle.width / 2);
+            
+            // Keep paddle within canvas bounds
+            if (paddle.x < 0) {
+                paddle.x = 0;
+            } else if (paddle.x + paddle.width > canvas.width) {
+                paddle.x = canvas.width - paddle.width;
+            }
+        });
+        
+        // Start game on touch
+        gameContainer.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            
+            if (gameState.paused && !gameState.gameOver) {
+                gameState.paused = false;
+                hideMessage();
+            }
+        });
+        
+        // Mouse controls for paddle
+        gameContainer.addEventListener('mousemove', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            
+            // Move paddle to mouse position (centered)
+            paddle.x = mouseX - (paddle.width / 2);
+            
+            // Keep paddle within canvas bounds
+            if (paddle.x < 0) {
+                paddle.x = 0;
+            } else if (paddle.x + paddle.width > canvas.width) {
+                paddle.x = canvas.width - paddle.width;
+            }
+        });
+        
+        // Start game on click
+        gameContainer.addEventListener('click', function() {
+            if (gameState.paused && !gameState.gameOver) {
+                gameState.paused = false;
+                hideMessage();
+            }
+        });
+        
+        // Keyboard controls
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowLeft' || e.key === 'a') {
+                // Move paddle left
+                paddle.x -= 20;
+                if (paddle.x < 0) {
+                    paddle.x = 0;
+                }
+            } else if (e.key === 'ArrowRight' || e.key === 'd') {
+                // Move paddle right
+                paddle.x += 20;
+                if (paddle.x + paddle.width > canvas.width) {
+                    paddle.x = canvas.width - paddle.width;
+                }
+            } else if (e.key === ' ' || e.key === 'p') {
+                // Toggle pause state
+                gameState.paused = !gameState.paused;
+                
+                if (gameState.paused) {
+                    showMessage("Paused");
+                } else {
+                    hideMessage();
+                }
+            }
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', function() {
+            initGame();
+        });
+        
+        // Initialize the game when the page loads
+        window.onload = initGame;
+    </script>
+</body>
+</html>
