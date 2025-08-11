@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Pong – Retro CRT</title>
   <style>
     :root {
@@ -15,22 +15,25 @@
     html, body { height: 100%; }
     body {
       margin: 0;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      min-height: 100dvh;
       background: radial-gradient(1200px 800px at 50% 20%, #071013, var(--bg));
       color: var(--fg);
       font: 16px/1.4 system-ui, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial, monospace;
       display: grid;
       place-items: center;
+      overflow: hidden;
     }
 
     .wrap {
-      width: min(96vw, 960px);
-      aspect-ratio: 4 / 3;
+      /* Sized by JS to maintain exact 4:3 while fitting vw/vh */
       position: relative;
       border-radius: 8px;
       box-shadow: 0 10px 40px rgba(0,0,0,.8), inset 0 0 0 2px rgba(24,255,155,.25);
       overflow: hidden;
       background: #000;
       image-rendering: pixelated;
+      touch-action: none; /* improve touch handling */
     }
 
     canvas { display: block; width: 100%; height: 100%; background: #000; }
@@ -39,15 +42,15 @@
 
     .score {
       position: absolute; top: 6px; left: 0; right: 0;
-      text-align: center; letter-spacing: .15em; font-weight: 800; font-size: clamp(16px, 3vw, 28px);
+      text-align: center; letter-spacing: .15em; font-weight: 800; font-size: clamp(14px, 3vw, 28px);
       text-shadow: 0 0 8px rgba(24,255,155,.45);
       color: var(--glow);
     }
 
     .controls {
-      position: absolute; bottom: 8px; left: 8px; right: 8px;
+      position: absolute; bottom: 6px; left: 6px; right: 6px;
       display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center;
-      color: var(--muted); font-size: clamp(12px, 1.8vw, 14px);
+      color: var(--muted); font-size: clamp(10px, 1.8vw, 14px);
       text-shadow: 0 2px 8px rgba(0,0,0,.6);
     }
 
@@ -56,7 +59,7 @@
       user-select: none;
       border: 1px solid rgba(24,255,155,.35);
       background: rgba(24,255,155,.08);
-      padding: 8px 12px;
+      padding: 6px 10px;
       border-radius: 6px;
       color: var(--fg);
       backdrop-filter: blur(2px);
@@ -94,6 +97,14 @@
     .vignette::before {
       content: ""; position: absolute; inset: 0; pointer-events: none;
       box-shadow: inset 0 0 120px 40px rgba(0,0,0,.9);
+    }
+
+    /* Landscape phones: tighten HUD */
+    @media (orientation: landscape) and (max-height: 420px) {
+      .controls { font-size: 10px; gap: 6px; }
+      .controls .legend { display: none; }
+      .pill { padding: 5px 8px; }
+      .score { font-size: 14px; }
     }
 
     @media (max-width: 640px) { .controls .legend { display: none; } }
@@ -167,9 +178,8 @@
       }
 
       // Logical game size (virtual pixels). Canvas will scale to fit.
-      const W = 960;
-      const H = 720;
-      canvas.width = W; canvas.height = H;
+      const W = 960; // width units
+      const H = 720; // height units (4:3)
 
       // Helpers
       const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -402,6 +412,23 @@
 
       function renderScore() { scoreEl.textContent = `${state.leftScore}  •  ${state.rightScore}`; }
 
+      // Layout: size wrapper to fit viewport with 4:3, then set crisp canvas
+      function layout() {
+        const vv = window.visualViewport;
+        const vw = vv ? vv.width : window.innerWidth;
+        const vh = vv ? vv.height : window.innerHeight;
+        const maxW = Math.min(960, vw * 0.98);
+        const maxH = vh * 0.96;
+        const scale = Math.min(maxW / W, maxH / H);
+        wrap.style.width = (W * scale) + 'px';
+        wrap.style.height = (H * scale) + 'px';
+
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = W * dpr; canvas.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+      }
+
       // Main loop
       function tick(t) {
         const nowT = t / 1000;
@@ -453,16 +480,13 @@
       canvas.addEventListener('touchstart', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
       canvas.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
 
-      // Resize handling to keep crisp canvas on HiDPI
-      function fitCanvas() {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        canvas.width = W * dpr; canvas.height = H * dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.imageSmoothingEnabled = false;
-      }
-      addEventListener('resize', fitCanvas); fitCanvas();
+      // Re-layout on viewport changes (incl. mobile chrome/safari toolbars)
+      addEventListener('resize', layout);
+      if (window.visualViewport) visualViewport.addEventListener('resize', layout);
+      addEventListener('orientationchange', () => setTimeout(layout, 100));
 
-      // Kick off menu
+      // Initial layout + menu
+      layout();
       showStart();
     })();
   </script>
