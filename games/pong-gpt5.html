@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pong – Retro CRT</title>
+  <style>
+    :root {
+      --bg: #000000;
+      --fg: #e8e8e8;
+      --muted: #a0a0a0;
+      --glow: #18ff9b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 50% 20%, #071013, var(--bg));
+      color: var(--fg);
+      font: 16px/1.4 system-ui, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial, monospace;
+      display: grid;
+      place-items: center;
+    }
+
+    .wrap {
+      width: min(96vw, 960px);
+      aspect-ratio: 4 / 3;
+      position: relative;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.8), inset 0 0 0 2px rgba(24,255,155,.25);
+      overflow: hidden;
+      background: #000;
+      image-rendering: pixelated;
+    }
+
+    canvas { display: block; width: 100%; height: 100%; background: #000; }
+
+    .hud { position: absolute; inset: 0; pointer-events: none; }
+
+    .score {
+      position: absolute; top: 6px; left: 0; right: 0;
+      text-align: center; letter-spacing: .15em; font-weight: 800; font-size: clamp(16px, 3vw, 28px);
+      text-shadow: 0 0 8px rgba(24,255,155,.45);
+      color: var(--glow);
+    }
+
+    .controls {
+      position: absolute; bottom: 8px; left: 8px; right: 8px;
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center;
+      color: var(--muted); font-size: clamp(12px, 1.8vw, 14px);
+      text-shadow: 0 2px 8px rgba(0,0,0,.6);
+    }
+
+    .pill {
+      pointer-events: auto;
+      user-select: none;
+      border: 1px solid rgba(24,255,155,.35);
+      background: rgba(24,255,155,.08);
+      padding: 8px 12px;
+      border-radius: 6px;
+      color: var(--fg);
+      backdrop-filter: blur(2px);
+      cursor: pointer;
+      transition: transform .12s ease, background .2s ease, border-color .2s ease;
+      font-weight: 700;
+    }
+    .pill:active { transform: translateY(1px) scale(.98); }
+    .pill:hover { background: rgba(24,255,155,.14); border-color: rgba(24,255,155,.55); }
+
+    .center-cta { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+    .card {
+      pointer-events: auto; text-align: center; max-width: 520px; width: calc(100% - 24px);
+      background: linear-gradient(180deg, rgba(24,255,155,.10), rgba(24,255,155,.05));
+      border: 1px solid rgba(24,255,155,.35);
+      border-radius: 10px; padding: 18px 18px 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.55);
+    }
+    .card h1 { margin: 0 0 8px; font-size: clamp(18px, 3vw, 24px); }
+    .card p { margin: 0 12px 12px; color: var(--muted); font-size: clamp(12px, 2vw, 14px); }
+    .card .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    .primary { background: rgba(24,255,155,.22); border: 1px solid rgba(24,255,155,.6); font-weight: 800; }
+
+    .winner { font-weight: 800; font-size: clamp(18px, 3vw, 26px); margin-bottom: 8px; color: var(--glow); }
+
+    /* CRT overlay */
+    .crt::after {
+      content: "";
+      position: absolute; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom, rgba(24,255,155,.06), rgba(24,255,155,.06) 2px, rgba(0,0,0,0) 2px, rgba(0,0,0,0) 4px
+      );
+      mix-blend-mode: screen;
+    }
+    .vignette::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      box-shadow: inset 0 0 120px 40px rgba(0,0,0,.9);
+    }
+
+    @media (max-width: 640px) { .controls .legend { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="wrap crt vignette" id="wrap">
+    <canvas id="game" aria-label="Pong game canvas" role="img"></canvas>
+    <div class="hud">
+      <div class="score" id="score"></div>
+      <div class="controls">
+        <div class="legend">Left: W/S. Right: ↑/↓. P=Pause, R=Reset. M=Mute.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="pill" id="btnPause" title="Pause or resume">Pause</button>
+          <button class="pill" id="btnReset" title="Reset the match">Reset</button>
+          <button class="pill" id="btnAI" title="Toggle right paddle AI">Right AI: On</button>
+          <button class="pill" id="btnMute" title="Mute/unmute sound">Sound: On</button>
+          <button class="pill" id="btnMusic" title="Toggle background tune">Music: On</button>
+        </div>
+      </div>
+      <div class="center-cta" id="overlay"></div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const scoreEl = document.getElementById('score');
+      const overlay = document.getElementById('overlay');
+      const btnPause = document.getElementById('btnPause');
+      const btnReset = document.getElementById('btnReset');
+      const btnAI = document.getElementById('btnAI');
+      const btnMute = document.getElementById('btnMute');
+      const btnMusic = document.getElementById('btnMusic');
+      const wrap = document.getElementById('wrap');
+      const ctx = canvas.getContext('2d');
+
+      // Audio (8-bit style)
+      let audio = { ctx: null, master: null, muted: false, musicOn: true, musicTimer: null };
+      function initAudio() {
+        if (audio.ctx) return;
+        audio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audio.master = audio.ctx.createGain();
+        audio.master.gain.value = 0.35;
+        audio.master.connect(audio.ctx.destination);
+      }
+      function now() { return audio.ctx ? audio.ctx.currentTime : 0; }
+      function beep(freq=440, dur=0.12, type='square', vol=0.3) {
+        if (!audio.ctx || audio.muted) return;
+        const t0 = now();
+        const o = audio.ctx.createOscillator();
+        const g = audio.ctx.createGain();
+        o.type = type; o.frequency.setValueAtTime(freq, t0);
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(vol, t0 + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(g); g.connect(audio.master);
+        o.start(t0); o.stop(t0 + dur + 0.02);
+      }
+      function chord(freqs=[440,550,660], dur=0.18, vol=0.15) {
+        if (!audio.ctx || audio.muted) return;
+        freqs.forEach(f=>beep(f, dur, 'square', vol));
+      }
+      function toggleMusicLoop(on) {
+        if (!audio.ctx) return;
+        if (audio.musicTimer) { clearInterval(audio.musicTimer); audio.musicTimer = null; }
+        if (!on || audio.muted) return;
+        const seq = [196, 196, 247, 196, 392, 196, 330, 196]; // simple 8-bit bassline
+        let i = 0;
+        audio.musicTimer = setInterval(()=>{ beep(seq[i%seq.length], 0.08, 'square', 0.12); i++; }, 220);
+      }
+
+      // Logical game size (virtual pixels). Canvas will scale to fit.
+      const W = 960;
+      const H = 720;
+      canvas.width = W; canvas.height = H;
+
+      // Helpers
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const rnd = (a, b) => Math.random() * (b - a) + a;
+
+      // Game state
+      let state = {
+        running: false,
+        paused: false,
+        countdown: 0,
+        leftScore: 0,
+        rightScore: 0,
+        toWin: 7,
+        rightAI: true,
+        lastTime: 0,
+      };
+
+      const field = { lineWidth: 4, netGap: 12 };
+
+      const paddle = (x) => ({
+        x,
+        y: H / 2 - 60,
+        w: 10, h: 120,
+        speed: 520,
+        dy: 0,
+      });
+
+      const ball = () => ({
+        x: W / 2, y: H / 2,
+        r: 6,
+        speed: 420,
+        maxSpeed: 950,
+        ax: 1, ay: 1,
+        vx: 0, vy: 0,
+      });
+
+      let L = paddle(24);
+      let R = paddle(W - 24 - 10);
+      let B = ball();
+
+      const keys = new Set();
+
+      function launchBall(dir = Math.random() < 0.5 ? -1 : 1) {
+        B.x = W / 2; B.y = H / 2;
+        const angle = rnd(-0.35, 0.35);
+        const speed = rnd(B.speed * 0.95, B.speed * 1.05);
+        B.vx = Math.cos(angle) * speed * dir;
+        B.vy = Math.sin(angle) * speed;
+      }
+
+      function reset(match = false) {
+        state.leftScore = 0; state.rightScore = 0;
+        L = paddle(24); R = paddle(W - 24 - 10); B = ball();
+        state.paused = false; state.running = true; state.countdown = 1.0;
+        launchBall();
+      }
+
+      function drawNet() {
+        ctx.save();
+        ctx.lineWidth = field.lineWidth;
+        ctx.strokeStyle = 'rgba(24,255,155,0.35)';
+        ctx.beginPath();
+        const step = 18;
+        for (let y = 0; y < H; y += step) {
+          ctx.moveTo(W / 2, y);
+          ctx.lineTo(W / 2, y + step / 2);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function draw() {
+        // Clear
+        ctx.clearRect(0, 0, W, H);
+
+        // Center glow
+        const grd = ctx.createRadialGradient(W/2, H/2, 80, W/2, H/2, H/1.1);
+        grd.addColorStop(0, 'rgba(24,255,155,0.08)');
+        grd.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grd; ctx.fillRect(0,0,W,H);
+
+        // Net
+        drawNet();
+
+        // Paddles & ball
+        ctx.fillStyle = '#e8e8e8';
+        ctx.shadowColor = 'rgba(24,255,155,0.55)';
+        ctx.shadowBlur = 18;
+        ctx.fillRect(Math.round(L.x), Math.round(L.y), L.w, L.h);
+        ctx.fillRect(Math.round(R.x), Math.round(R.y), R.w, R.h);
+        ctx.beginPath(); ctx.arc(Math.round(B.x), Math.round(B.y), B.r, 0, Math.PI*2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Countdown overlay
+        if (state.countdown > 0) {
+          const n = Math.ceil(state.countdown * 3);
+          ctx.save();
+          ctx.globalAlpha = Math.min(1, state.countdown + 0.2);
+          ctx.fillStyle = 'rgba(24,255,155,0.8)';
+          ctx.font = '800 120px monospace';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(String(n), W / 2, H / 2);
+          ctx.restore();
+        }
+      }
+
+      function collideRectCircle(rx, ry, rw, rh, cx, cy, cr) {
+        const nx = clamp(cx, rx, rx + rw);
+        const ny = clamp(cy, ry, ry + rh);
+        const dx = cx - nx, dy = cy - ny;
+        return dx * dx + dy * dy <= cr * cr;
+      }
+
+      function update(dt) {
+        // Player control
+        L.dy = 0; R.dy = 0;
+        if (keys.has('KeyW')) L.dy -= L.speed;
+        if (keys.has('KeyS')) L.dy += L.speed;
+        if (!state.rightAI) {
+          if (keys.has('ArrowUp')) R.dy -= R.speed;
+          if (keys.has('ArrowDown')) R.dy += R.speed;
+        }
+
+        // Apply movement
+        L.y = clamp(L.y + L.dy * dt, 0, H - L.h);
+        R.y = clamp(R.y + (state.rightAI ? 0 : R.dy * dt), 0, H - R.h);
+
+        // Simple AI for right paddle
+        if (state.rightAI) {
+          const target = B.y - R.h / 2;
+          const ease = 6;
+          R.y += clamp(target - R.y, -R.speed * dt, R.speed * dt) / ease * 2.2;
+          R.y = clamp(R.y, 0, H - R.h);
+        }
+
+        // Countdown before serve
+        if (state.countdown > 0) {
+          state.countdown = Math.max(0, state.countdown - dt);
+          return;
+        }
+
+        // Ball physics
+        B.x += B.vx * dt; B.y += B.vy * dt;
+
+        // Top/bottom walls
+        if (B.y - B.r < 0 && B.vy < 0) { B.y = B.r; B.vy *= -1; beep(880,0.05); }
+        if (B.y + B.r > H && B.vy > 0) { B.y = H - B.r; B.vy *= -1; beep(880,0.05); }
+
+        // Paddle collisions
+        // Left paddle
+        if (B.vx < 0 && collideRectCircle(L.x, L.y, L.w, L.h, B.x, B.y, B.r)) {
+          const hit = ((B.y - (L.y + L.h / 2)) / (L.h / 2));
+          const angle = hit * 0.7;
+          const speed = clamp(Math.hypot(B.vx, B.vy) * 1.06, B.speed, B.maxSpeed);
+          B.vx = Math.cos(angle) * speed;
+          B.vy = Math.sin(angle) * speed;
+          B.x = L.x + L.w + B.r + 0.1;
+          beep(320 + Math.abs(hit)*200, 0.07);
+        }
+        // Right paddle
+        if (B.vx > 0 && collideRectCircle(R.x, R.y, R.w, R.h, B.x, B.y, B.r)) {
+          const hit = ((B.y - (R.y + R.h / 2)) / (R.h / 2));
+          const angle = hit * 0.7;
+          const speed = clamp(Math.hypot(B.vx, B.vy) * 1.06, B.speed, B.maxSpeed);
+          B.vx = -Math.cos(angle) * speed;
+          B.vy = Math.sin(angle) * speed;
+          B.x = R.x - B.r - 0.1;
+          beep(360 + Math.abs(hit)*220, 0.07);
+        }
+
+        // Scoring
+        if (B.x + B.r < 0) {
+          state.rightScore += 1; chord([392,494,587],0.12); pointScored();
+        }
+        if (B.x - B.r > W) {
+          state.leftScore += 1; chord([392,523,659],0.12); pointScored();
+        }
+      }
+
+      function pointScored() {
+        if (state.leftScore >= state.toWin || state.rightScore >= state.toWin) {
+          state.running = false; showWinner();
+          beep(196,0.2); beep(147,0.25); chord([98,147,196],0.4,0.18);
+          return;
+        }
+        B = ball();
+        state.countdown = 1.0;
+        const dir = state.leftScore > state.rightScore ? -1 : 1;
+        launchBall(dir);
+        // Countdown ticks
+        let ticks = 3;
+        const t = setInterval(()=>{ if (!state.running) return clearInterval(t); beep(740,0.05); if(--ticks<=0) clearInterval(t); }, 260);
+      }
+
+      function showOverlay(html) { overlay.innerHTML = `<div class="card">${html}</div>`; }
+      function clearOverlay() { overlay.innerHTML = ''; }
+
+      function showStart() {
+        showOverlay(`
+          <h1 style="color: var(--glow); text-shadow:0 0 10px rgba(24,255,155,.6)">PONG // CRT</h1>
+          <p>First to <strong>${state.toWin}</strong> wins. Left: W/S. Right: ↑/↓. Enable AI or go head‑to‑head. Works with touch.</p>
+          <div class="actions">
+            <button id="startBtn" class="pill primary">Insert Coin (Start)</button>
+            <button id="toggleAiBtn" class="pill">Right AI: ${state.rightAI ? 'On' : 'Off'}</button>
+          </div>
+        `);
+        document.getElementById('startBtn').onclick = () => { clearOverlay(); initAudio(); if (audio.ctx.state === 'suspended') audio.ctx.resume(); start(); toggleMusicLoop(audio.musicOn); };
+        document.getElementById('toggleAiBtn').onclick = () => { state.rightAI = !state.rightAI; showStart(); };
+      }
+
+      function showWinner() {
+        const who = state.leftScore > state.rightScore ? 'Left' : 'Right';
+        showOverlay(`
+          <div class="winner">${who} WINS</div>
+          <p>Score ${state.leftScore} – ${state.rightScore}</p>
+          <div class="actions">
+            <button id="againBtn" class="pill primary">Play again</button>
+            <button id="menuBtn" class="pill">Main menu</button>
+          </div>
+        `);
+        document.getElementById('againBtn').onclick = () => { clearOverlay(); reset(true); };
+        document.getElementById('menuBtn').onclick = () => { showStart(); };
+      }
+
+      function start() {
+        state.running = true; state.paused = false; state.leftScore = 0; state.rightScore = 0; L = paddle(24); R = paddle(W-24-10); B = ball();
+        state.countdown = 1.0; launchBall();
+        chord([262,330,392],0.18,0.12);
+      }
+
+      function renderScore() { scoreEl.textContent = `${state.leftScore}  •  ${state.rightScore}`; }
+
+      // Main loop
+      function tick(t) {
+        const nowT = t / 1000;
+        const dt = Math.min(0.033, nowT - (state.lastTime || nowT));
+        state.lastTime = nowT;
+        if (state.running && !state.paused) update(dt);
+        renderScore();
+        draw();
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+
+      // Input
+      addEventListener('keydown', (e) => {
+        if (["KeyW","KeyS","ArrowUp","ArrowDown"].includes(e.code)) { keys.add(e.code); e.preventDefault(); }
+        if (e.code === 'KeyP') togglePause();
+        if (e.code === 'KeyR') reset(true);
+        if (e.code === 'KeyM') { initAudio(); audio.muted = !audio.muted; btnMute.textContent = `Sound: ${audio.muted ? 'Off' : 'On'}`; toggleMusicLoop(audio.musicOn); }
+      });
+      addEventListener('keyup', (e) => keys.delete(e.code));
+
+      // Buttons
+      btnPause.onclick = () => togglePause();
+      btnReset.onclick = () => reset(true);
+      btnAI.onclick = () => { state.rightAI = !state.rightAI; btnAI.textContent = `Right AI: ${state.rightAI ? 'On' : 'Off'}`; beep(520,0.06); };
+      btnMute.onclick = () => { initAudio(); audio.muted = !audio.muted; btnMute.textContent = `Sound: ${audio.muted ? 'Off' : 'On'}`; if (!audio.muted) chord([330,392],0.12); toggleMusicLoop(audio.musicOn); };
+      btnMusic.onclick = () => { initAudio(); audio.musicOn = !audio.musicOn; btnMusic.textContent = `Music: ${audio.musicOn ? 'On' : 'Off'}`; toggleMusicLoop(audio.musicOn); };
+
+      function togglePause() {
+        if (!state.running) return;
+        state.paused = !state.paused;
+        btnPause.textContent = state.paused ? 'Resume' : 'Pause';
+        beep(state.paused ? 200 : 440, 0.08);
+      }
+
+      // Touch controls
+      function handleTouch(ev) {
+        const rect = canvas.getBoundingClientRect();
+        for (const t of ev.touches) {
+          const x = (t.clientX - rect.left) / rect.width * W;
+          const y = (t.clientY - rect.top) / rect.height * H;
+          if (x < W / 2) {
+            L.y = clamp(y - L.h / 2, 0, H - L.h);
+          } else {
+            if (!state.rightAI) R.y = clamp(y - R.h / 2, 0, H - R.h);
+          }
+        }
+      }
+      canvas.addEventListener('touchstart', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
+      canvas.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
+
+      // Resize handling to keep crisp canvas on HiDPI
+      function fitCanvas() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = W * dpr; canvas.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+      }
+      addEventListener('resize', fitCanvas); fitCanvas();
+
+      // Kick off menu
+      showStart();
+    })();
+  </script>
+</body>
+</html>
